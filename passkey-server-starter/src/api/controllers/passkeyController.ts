@@ -4,7 +4,15 @@ import {User} from '@sharedTypes/DBTypes';
 import {NextFunction, Request, Response} from 'express';
 import CustomError from '../../classes/CustomError';
 import fetchData from '../../utils/fetchData';
-import {generateRegistrationOptions} from '@simplewebauthn/server';
+import {
+  generateRegistrationOptions,
+  verifyRegistrationResponse,
+  VerifyRegistrationResponseOpts,
+} from '@simplewebauthn/server';
+import {Challenge, PasskeyUserPost} from '../../types/PasskeyTypes';
+import challengeModel from '../models/challengeModel';
+import passkeyUserModel from '../models/passkeyUserModel';
+import {RegistrationResponseJSON} from '@simplewebauthn/server/script/deps';
 
 // check environment variables
 if (
@@ -61,15 +69,27 @@ const setupPasskey = async (
       supportedAlgorithmIDs: [-7, -257],
     });
 
-    console.log(regOptions);
+    // console.log(regOptions);
 
-    // const challenge: Challenge = {
-    //   challenge: regOptions.challenge,
-    //   email: userResponse.user.email,
-    // };
+    const challenge: Challenge = {
+      challenge: regOptions.challenge,
+      email: userResponse.user.email,
+    };
 
-    // TODO: Add user to PasskeyUser collection
-    // TODO: Send response with email and options
+    await challengeModel.create(challenge);
+
+    const passkeyUser: PasskeyUserPost = {
+      email: userResponse.user.email,
+      userId: userResponse.user.user_id,
+      devices: [],
+    };
+
+    await passkeyUserModel.create(passkeyUser);
+
+    res.json({
+      email: userResponse.user.email,
+      options: regOptions,
+    });
   } catch (error) {
     next(new CustomError((error as Error).message, 500));
   }
@@ -77,13 +97,45 @@ const setupPasskey = async (
 
 // Registration verification handler
 const verifyPasskey = async (
-  req: Request,
-  res: Response,
+  req: Request<
+    {},
+    {},
+    {
+      email: string;
+      registrationOptions: RegistrationResponseJSON;
+    }
+  >,
+  res: Response<UserResponse>,
   next: NextFunction,
 ) => {
   try {
-    // TODO: Retrieve expected challenge from DB
+    const expectedChallenge = await challengeModel.findOne({
+      email: req.body.email,
+    });
+
+    if (!expectedChallenge) {
+      next(new CustomError('challenge not found', 404));
+      return;
+    }
+
     // TODO: Verify registration response
+    const opts: VerifyRegistrationResponseOpts = {
+      response: req.body.registrationOptions,
+      expectedChallenge: expectedChallenge.challenge,
+      expectedOrigin:
+        NODE_ENV === 'development'
+          ? `http://${RP_ID}:5173`
+          : `https://${RP_ID}`,
+      expectedRPID: RP_ID,
+    };
+    const verification = await verifyRegistrationResponse(opts);
+
+    const {verified, registrationInfo} = verification;
+
+    if (!verified || !registrationInfo) {
+      next(new CustomError('Verification failed', 403));
+      return;
+    }
     // TODO: Check if device is already registered
     // TODO: Save new authenticator to AuthenticatorDevice collection
     // TODO: Update user devices array in DB
