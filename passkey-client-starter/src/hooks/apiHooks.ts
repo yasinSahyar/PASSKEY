@@ -84,7 +84,7 @@ const usePasskey = () => {
 
     const authenticationResponse =
       await fetchData<PublicKeyCredentialRequestOptionsJSON>(
-        import.meta.env.VITE_PASSKEY_API + '/auth/login/setup',
+        import.meta.env.VITE_PASSKEY_API + '/auth/login-setup',
         loginOptions,
       );
 
@@ -98,7 +98,7 @@ const usePasskey = () => {
     };
 
     return await fetchData<LoginResponse>(
-      import.meta.env.VITE_PASSKEY_API + '/auth/login/verify',
+      import.meta.env.VITE_PASSKEY_API + '/auth/login-verify',
       verifyOptions,
     );
   };

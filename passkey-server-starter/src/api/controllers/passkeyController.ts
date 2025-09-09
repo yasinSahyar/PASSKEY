@@ -1,4 +1,4 @@
-import {UserResponse} from '@sharedTypes/MessageTypes';
+import {LoginResponse, UserResponse} from '@sharedTypes/MessageTypes';
 import {User} from '@sharedTypes/DBTypes';
 import {NextFunction, Request, Response} from 'express';
 import CustomError from '../../classes/CustomError';
@@ -7,6 +7,8 @@ import {
   generateAuthenticationOptions,
   GenerateAuthenticationOptionsOpts,
   generateRegistrationOptions,
+  verifyAuthenticationResponse,
+  VerifyAuthenticationResponseOpts,
   verifyRegistrationResponse,
   VerifyRegistrationResponseOpts,
 } from '@simplewebauthn/server';
@@ -25,6 +27,7 @@ import {
 } from '@simplewebauthn/types';
 import authenticatorDeviceModel from '../models/authenticatorDeviceModel';
 import {Types} from 'mongoose';
+import jwt from 'jsonwebtoken';
 
 // check environment variables
 if (
@@ -229,16 +232,88 @@ const authenticationOptions = async (
 
 // Authentication verification and login handler
 const verifyAuthentication = async (
-  req: Request,
-  res: Response,
+  req: Request<
+    {},
+    {},
+    {
+      email: string;
+      authResponse: AuthenticationResponseJSON;
+    }
+  >,
+  res: Response<LoginResponse>,
   next: NextFunction,
 ) => {
   try {
-    // TODO: Retrieve expected challenge from DB
+    const challenge = await challengeModel.findOne({email: req.body.email});
+    if (!challenge) {
+      next(new CustomError('challenge not found', 404));
+      return;
+    }
     // TODO: Verify authentication response
-    // TODO: Update authenticator's counter
-    // TODO: Clear challenge from DB after successful authentication
-    // TODO: Generate and send JWT token
+    const user = (await passkeyUserModel
+      .findOne({email: req.body.email})
+      .populate('devices')) as unknown as PasskeyUserGet;
+
+    if (!user) {
+      next(new CustomError('User not found', 404));
+      return;
+    }
+
+    const opts: VerifyAuthenticationResponseOpts = {
+      expectedRPID: RP_ID,
+      response: req.body.authResponse,
+      expectedChallenge: challenge.challenge,
+      expectedOrigin:
+        NODE_ENV === 'development'
+          ? `http://${RP_ID}:5173`
+          : `https://${RP_ID}`,
+      authenticator: {
+        credentialPublicKey: Buffer.from(user.devices[0].credentialPublicKey),
+        credentialID: user.devices[0].credentialID,
+        counter: user.devices[0].counter,
+      },
+      requireUserVerification: false,
+    };
+
+    const verification = await verifyAuthenticationResponse(opts);
+
+    const {verified, authenticationInfo} = verification;
+
+    // Update authenticator's counter
+    if (!verified) {
+      await authenticatorDeviceModel.findByIdAndUpdate(user.devices[0]._id, {
+        counter: authenticationInfo.newCounter,
+      });
+    }
+
+    // Clear challenge from DB after successful authentication
+    await challengeModel.findOneAndDelete({email: req.body.email});
+
+    // Generate and send JWT
+    const userResponse = await fetchData<UserResponse>(
+      AUTH_URL + '/api/v1/users/' + user.userId,
+    );
+
+    if (!userResponse) {
+      next(new CustomError('user not found', 404));
+      return;
+    }
+
+    const token = jwt.sign(
+      {
+        user_id: userResponse.user.user_id,
+        level_name: userResponse.user.level_name,
+      },
+      JWT_SECRET,
+    );
+
+    const message: LoginResponse = {
+      message: 'Login Success',
+      token,
+      user: userResponse.user,
+    };
+
+    res.json(message);
   } catch (error) {
     next(new CustomError((error as Error).message, 500));
   }
