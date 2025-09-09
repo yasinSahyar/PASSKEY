@@ -31,7 +31,8 @@ const UserProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   const handleRegister = async (user: UserWithNoPassword) => {
-    // TODO implement register function
+    // tallenna user debuggausta varten
+    setRegisterResult(user);
   };
 
   const handleLogout = useCallback(() => {
