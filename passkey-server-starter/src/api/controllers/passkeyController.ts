@@ -4,11 +4,17 @@ import {NextFunction, Request, Response} from 'express';
 import CustomError from '../../classes/CustomError';
 import fetchData from '../../utils/fetchData';
 import {
+  generateAuthenticationOptions,
+  GenerateAuthenticationOptionsOpts,
   generateRegistrationOptions,
   verifyRegistrationResponse,
   VerifyRegistrationResponseOpts,
 } from '@simplewebauthn/server';
-import {Challenge, PasskeyUserPost} from '../../types/PasskeyTypes';
+import {
+  Challenge,
+  PasskeyUserGet,
+  PasskeyUserPost,
+} from '../../types/PasskeyTypes';
 import challengeModel from '../models/challengeModel';
 import passkeyUserModel from '../models/passkeyUserModel';
 import {
@@ -184,14 +190,38 @@ const verifyPasskey = async (
 // Generate authentication options handler
 const authenticationOptions = async (
   req: Request<{}, {}, {email: string}>,
-  res: Response<>,
+  res: Response<PublicKeyCredentialRequestOptionsJSON>,
   next: NextFunction,
 ) => {
   try {
-    // TODO: Retrieve user and associated devices from DB
-    // TODO: Generate authentication options
-    // TODO: Save challenge to DB
-    // TODO: Send options in response
+    const user = (await passkeyUserModel
+      .findOne({email: req.body.email})
+      .populate('devices')) as unknown as PasskeyUserGet;
+
+    if (!user) {
+      next(new CustomError('User not found', 404));
+      return;
+    }
+
+    const opts: GenerateAuthenticationOptionsOpts = {
+      timeout: 60000,
+      rpID: RP_ID,
+      allowCredentials: user.devices.map((device) => ({
+        id: device.credentialID,
+        type: 'public-key',
+        transports: device.transports,
+      })),
+      userVerification: 'preferred',
+    };
+
+    const authOptions = await generateAuthenticationOptions(opts);
+
+    await challengeModel.create({
+      email: req.body.email,
+      challenge: authOptions.challenge,
+    });
+
+    res.send(authOptions);
   } catch (error) {
     next(new CustomError((error as Error).message, 500));
   }
